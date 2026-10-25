@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -25,14 +25,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Decide whether fund data needs a refresh
+        id: need
+        run: |
+          # Refresh on the weekly schedule and on manual runs. On an ordinary upload
+          # (for example a new stocks.csv) refresh only if no fund data exists yet.
+          if [ "${{ github.event_name }}" != "push" ] || grep -q '"updated":null' data/funds.json; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Refresh fund data
         id: update
+        if: steps.need.outputs.run == 'true'
         continue-on-error: true
         run: python scripts/update_funds.py
+      - name: Save the new fund data in the repository
+        if: steps.need.outputs.run == 'true' && steps.update.outcome == 'success'
+        run: |
+          git config user.name "fund-data-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add data/funds.json
+          git diff --cached --quiet || (git commit -m "Update fund data" && git push)
       - name: Collect site files
         run: |
           mkdir _site
-          cp index.html _site/
+          cp index.html manifest.webmanifest icon-192.png icon-512.png _site/
           cp -r data _site/data
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -40,7 +58,7 @@ jobs:
       - name: Flag a failed data refresh
         if: steps.update.outcome == 'failure'
         run: |
-          echo "::warning::Fund data refresh failed; the site was published without new data."
+          echo "::warning::Fund data refresh failed; the site was published with the previous data."
 
   deploy:
     needs: build
