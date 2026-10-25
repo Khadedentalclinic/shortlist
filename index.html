@@ -79,6 +79,7 @@ input[type=search],input[type=number],select,textarea{font:inherit;background:va
 textarea{width:100%;min-height:84px;font:12.5px var(--mono)}
 .map{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px 10px;align-items:center;font-size:13px}
 .map select{width:100%}
+.btnrow{display:flex;flex-wrap:wrap;gap:8px}
 .opt{display:flex;gap:10px;align-items:flex-start;font-weight:500;cursor:pointer}
 .opt input{margin-top:4px;flex:none}
 .opt small{display:block;font-weight:400;color:var(--muted);font-size:12.5px;line-height:1.4;margin-top:2px}
@@ -155,8 +156,19 @@ td.n{font-family:var(--mono)}
       <div class="in">
         <section>
           <h2>How much each criterion counts</h2>
+          <p class="muted" id="wsrc" style="margin:0 0 10px;font-size:13px;line-height:1.4"></p>
           <div id="weights"></div>
-          <button class="btn" id="resetW" type="button">Reset weights</button>
+          <div class="btnrow">
+            <button class="btn" id="resetW" type="button">Reset to defaults</button>
+            <button class="btn" id="useSite" type="button" hidden>Use the site's weights</button>
+          </div>
+        </section>
+        <section>
+          <h2>Same weights on every device</h2>
+          <p class="muted" style="margin:0 0 8px;font-size:13.5px">Weights are saved per device. To make your phone and PC match, save yours as a settings file on the site (hosted version).</p>
+          <button class="btn" id="copyW" type="button">Copy my weights for the site</button>
+          <textarea id="wOut" aria-label="Weights file text" readonly hidden style="margin-top:8px"></textarea>
+          <p class="muted" id="wHelp" hidden style="margin:8px 0 0;font-size:13.5px;line-height:1.45"></p>
         </section>
         <section>
           <h2>Settings</h2>
@@ -425,7 +437,29 @@ var S={stocks:{},funds:{}};
 var SET=Object.assign({dedupe:true},store.get('shortlist.v1.settings')||{});
 var UI={limit:30,q:'',hide:false,mcap:'',cat:'All'};
 var expanded={};
-var wKey=function(k){return 'shortlist.v1.weights.'+k};
+var wKey=function(k){return 'shortlist.v2.weights.'+k};
+var SITE=null; /* weights file from the site: {saved:ms, stocks:{...}, funds:{...}} */
+function readLocalWeights(k){
+  var v=store.get(wKey(k));
+  if(v&&v.w&&typeof v.w==='object')return {w:v.w,at:+v.at||1};
+  var old=store.get('shortlist.v1.weights.'+k); /* saved by an earlier version, no date */
+  if(old&&typeof old==='object')return {w:old,at:1};
+  return null;
+}
+function saveLocalWeights(k){
+  var D=S[k];D.localAt=Date.now();D.wsrc='local';
+  store.set(wKey(k),{w:D.weights,at:D.localAt});
+}
+function applySite(k,force){
+  var D=S[k],sw=SITE&&SITE[k];
+  if(!sw||typeof sw!=='object')return;
+  if(!force&&(D.localAt||0)>=SITE.saved)return; /* this device changed weights after the file was saved */
+  CFG[k].metrics.forEach(function(m){
+    var v=sw[m.k];
+    D.weights[m.k]=(typeof v==='number'&&isFinite(v))?Math.max(0,Math.min(10,Math.round(v))):m.w;
+  });
+  D.wsrc='site';
+}
 var dKey=function(k){return 'shortlist.v1.data.'+k};
 var D0=function(){return S[kind]};
 
@@ -457,8 +491,12 @@ function initKind(k){
   if(saved&&saved.table&&saved.table.rows&&saved.table.rows.length>2){D.table=saved.table;D.map=saved.map;D.example=false}
   else{D.table=sampleTable(k);D.map=detectMap(C,D.table);D.example=true}
   D.weights={};C.metrics.forEach(function(m){D.weights[m.k]=m.w});
-  var w=store.get(wKey(k));
-  if(w)C.metrics.forEach(function(m){if(typeof w[m.k]==='number')D.weights[m.k]=w[m.k]});
+  var lw=readLocalWeights(k);
+  D.localAt=0;D.wsrc='default';
+  if(lw){
+    C.metrics.forEach(function(m){if(typeof lw.w[m.k]==='number')D.weights[m.k]=lw.w[m.k]});
+    D.localAt=lw.at;D.wsrc='local';
+  }
   buildRows(k);
 }
 function persistData(){var D=D0();if(!D.example&&!D.live)store.set(dKey(kind),{table:D.table,map:D.map})}
@@ -525,7 +563,7 @@ function renderPanel(){
       var rg=h('input');rg.type='range';rg.min=0;rg.max=10;rg.step=1;rg.id=id;rg.value=D.weights[m.k];
       rg.addEventListener('input',function(){
         D.weights[m.k]=+rg.value;o.textContent=rg.value;
-        store.set(wKey(kind),D.weights);renderList();renderLearn();
+        saveLocalWeights(kind);renderWsrc();renderList();renderLearn();
       });
       w.append(l,rg,h('small',null,m.tip));box.append(w);
     });
@@ -660,13 +698,22 @@ function renderLearn(){
   else{
     var nw={};C.metrics.forEach(function(m){nw[m.k]=Math.round((sug[m.k]||0)/maxPos*10)});
     var bt=h('button','btn primary','Use weights suggested by this list');bt.type='button';
-    bt.addEventListener('click',function(){C.metrics.forEach(function(m){D.weights[m.k]=nw[m.k]});store.set(wKey(kind),D.weights);renderPanel();renderList();renderLearn()});
+    bt.addEventListener('click',function(){C.metrics.forEach(function(m){D.weights[m.k]=nw[m.k]});saveLocalWeights(kind);renderPanel();renderWsrc();renderList();renderLearn()});
     box.append(bt);
   }
   box.append(h('p','muted','A link in one list can be luck. Trust a criterion only if it holds up in lists from several different years.'));
 }
 function renderNote(){$('#note').textContent=CFG[kind].noteText}
+function renderWsrc(){
+  var D=D0(),el=$('#wsrc'),us=$('#useSite'),has=!!(SITE&&SITE[kind]);
+  var d=SITE&&SITE.saved?new Date(SITE.saved).toLocaleDateString('en-IN'):'';
+  if(D.wsrc==='site')el.textContent='These weights come from the site\'s settings file (saved '+d+'). Every device that opens the site starts with them. If you change a slider here, the change stays on this device only.';
+  else if(D.wsrc==='local')el.textContent='You changed these weights on this device.'+(has?' The site\'s settings file (saved '+d+') is older, so it is not used here.':' Other devices will not see the change until you save it for the site below.');
+  else el.textContent='Built-in default weights. Change them below, then save them for the site so every device uses the same weights.';
+  us.hidden=!(has&&D.wsrc==='local');
+}
 function renderSettings(){
+  renderWsrc();
   var D=D0(),cb=$('#optDedupe'),n=D.dupes||0;
   cb.checked=!!SET.dedupe;
   $('#dupeNote').textContent=SET.dedupe
@@ -698,7 +745,27 @@ $('#file').addEventListener('change',function(e){
 $('#loadPaste').addEventListener('click',function(){var t=$('#paste').value;if(t.trim())loadText(t)});
 $('#resetW').addEventListener('click',function(){
   var D=D0();CFG[kind].metrics.forEach(function(m){D.weights[m.k]=m.w});
-  store.del(wKey(kind));renderPanel();renderList();renderLearn();
+  saveLocalWeights(kind);renderPanel();renderWsrc();renderList();renderLearn();
+});
+$('#useSite').addEventListener('click',function(){
+  var D=D0();
+  store.del(wKey(kind));store.del('shortlist.v1.weights.'+kind);D.localAt=0;
+  applySite(kind,true);renderPanel();renderWsrc();renderList();renderLearn();
+});
+function weightsFileText(){
+  var o={saved:Date.now(),saved_on:new Date().toISOString().slice(0,10)};
+  ['stocks','funds'].forEach(function(k){o[k]={};CFG[k].metrics.forEach(function(m){o[k][m.k]=S[k].weights[m.k]})});
+  return JSON.stringify(o,null,1);
+}
+$('#copyW').addEventListener('click',function(){
+  var ta=$('#wOut'),help=$('#wHelp'),txt=weightsFileText();
+  ta.value=txt;ta.hidden=false;help.hidden=false;
+  var steps=' On GitHub open your shortlist repository, open the data folder, click Add file, then Create new file, name it settings.json, paste, and click Commit changes twice. If settings.json already exists, open it, click the pencil icon, replace everything, and commit. Your other devices pick it up within a few minutes of opening the site.';
+  var done=function(ok){help.textContent=(ok?'Copied.':'Select the text above and copy it.')+steps};
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(txt).then(function(){done(true)},function(){ta.select();done(false)});
+    else{ta.select();done(false)}
+  }catch(e){ta.select();done(false)}
 });
 $('#more').addEventListener('click',function(){UI.limit+=30;renderList()});
 $('#optDedupe').addEventListener('change',function(e){
@@ -744,6 +811,11 @@ function tryLive(){
     D.liveDate=j.updated||'unknown';
     D.liveNote='Live data from AMFI, NAV date '+D.liveDate+'. It refreshes every Sunday.';
     offerLive('funds');
+  }).catch(function(){});
+  /* weights: optional data/settings.json, saved from the app's "Copy my weights for the site" button */
+  fetch('data/settings.json',{cache:'no-cache'}).then(function(r){if(!r.ok)throw new Error('no file');return r.json()}).then(function(j){
+    if(!j||typeof j.saved!=='number'||!isFinite(j.saved))return;
+    SITE=j;applySite('stocks');applySite('funds');renderAll();
   }).catch(function(){});
   /* stocks: optional data/stocks.csv that you upload to the site, so every device sees the same list */
   fetch('data/stocks.csv',{cache:'no-cache'}).then(function(r){
