@@ -1,5 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1D4ED8">
+<meta name="description" content="Rank Indian stocks and mutual funds on criteria you can see and change.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Shortlist">
+<style>
+:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+body{margin:0}
+img{max-width:100%}
+[hidden]{display:none!important}
+</style>
 <title>Stock Shortlist</title>
-<meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -61,6 +79,9 @@ input[type=search],input[type=number],select,textarea{font:inherit;background:va
 textarea{width:100%;min-height:84px;font:12.5px var(--mono)}
 .map{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px 10px;align-items:center;font-size:13px}
 .map select{width:100%}
+.opt{display:flex;gap:10px;align-items:flex-start;font-weight:500;cursor:pointer}
+.opt input{margin-top:4px;flex:none}
+.opt small{display:block;font-weight:400;color:var(--muted);font-size:12.5px;line-height:1.4;margin-top:2px}
 .how{margin:0;padding-left:18px;color:var(--muted);font-size:13.5px}
 .how li{margin-bottom:4px}
 .msg{font-size:13.5px;color:var(--bad);margin:0}
@@ -109,6 +130,8 @@ td.n{font-family:var(--mono)}
 .foot{margin-top:28px;color:var(--muted);font-size:13px;max-width:72ch}
 @media (prefers-reduced-motion:no-preference){.track i{transition:width .25s ease}}
 </style>
+</head>
+<body>
 
 <input type="file" id="file" class="sr" accept=".csv,.tsv,.txt,text/csv,text/plain">
 
@@ -134,6 +157,10 @@ td.n{font-family:var(--mono)}
           <h2>How much each criterion counts</h2>
           <div id="weights"></div>
           <button class="btn" id="resetW" type="button">Reset weights</button>
+        </section>
+        <section>
+          <h2>Settings</h2>
+          <label class="opt" for="optDedupe"><input type="checkbox" id="optDedupe"><span>Show each company once<small id="dupeNote"></small></span></label>
         </section>
         <section>
           <h2>Load your own list</h2>
@@ -196,15 +223,15 @@ var CFG={
   fields:[
    {k:'name',label:'Company name',text:1,kw:[/^(name|company|stock|symbol|scrip)/]},
    {k:'mcap',label:'Market cap (₹ Cr)',kw:[/mar(ket)?\.?\s*cap|mcap/]},
-   {k:'roe',label:'Return on equity',kw:[/\broe\b|return on equity/]},
+   {k:'roe',label:'Return on equity (5-year if present)',kw:[/(\broe\b|return on equity).*5\s*y|5\s*y.*(\broe\b|return on equity)|average return on equity/,/\broe\b|return on equity/]},
    {k:'roce',label:'Return on capital',kw:[/\broce\b|return on capital/]},
    {k:'de',label:'Debt to equity',kw:[/debt\s*(\/|to)?\s*eq|\bd\/e\b/]},
-   {k:'pg',label:'Profit growth',kw:[/\b(profit|pat|np)\b.*(growth|cagr).*(3|5|10)|(3|5|10).*\b(profit|pat|np)\b.*(growth|cagr)/,/\b(profit|pat|np)\b.*(growth|cagr)/],not:/qtr|quarter|yoy|var/},
-   {k:'sg',label:'Sales growth',kw:[/\b(sales|revenue)\b.*(growth|cagr).*(3|5|10)|(3|5|10).*\b(sales|revenue)\b.*(growth|cagr)/,/\b(sales|revenue)\b.*(growth|cagr)/],not:/qtr|quarter|yoy|var/},
+   {k:'pg',label:'Profit growth',kw:[/\b(profit|pat|np)\b.*(growth|cagr|var).*5\s*y|5\s*y.*\b(profit|pat|np)\b.*(growth|cagr|var)/,/\b(profit|pat|np)\b.*(growth|cagr|var).*(3|10)\s*y|(3|10)\s*y.*\b(profit|pat|np)\b.*(growth|cagr|var)/,/\b(profit|pat|np)\b.*(growth|cagr)/],not:/qtr|quarter|yoy/},
+   {k:'sg',label:'Sales growth',kw:[/\b(sales|revenue)\b.*(growth|cagr|var).*5\s*y|5\s*y.*\b(sales|revenue)\b.*(growth|cagr|var)/,/\b(sales|revenue)\b.*(growth|cagr|var).*(3|10)\s*y|(3|10)\s*y.*\b(sales|revenue)\b.*(growth|cagr|var)/,/\b(sales|revenue)\b.*(growth|cagr)/],not:/qtr|quarter|yoy/},
    {k:'pe5',label:'Median P/E, 5 years',kw:[/(median|hist|avg|average|5\s*y).*(\bpe\b|p\/e)|(\bpe\b|p\/e).*(median|hist|avg|average|5\s*y)/]},
    {k:'pe',label:'P/E now',kw:[/^(pe|p\/e|price to earning|price\/earning)/,/\bp\/e\b|\bpe\b|price to earning/],not:/median|hist|avg|average|5\s*y/},
    {k:'pledge',label:'Pledged shares %',kw:[/pledg/]},
-   {k:'prom',label:'Promoter holding %',kw:[/promoter/],not:/pledg/},
+   {k:'prom',label:'Promoter holding %',kw:[/promoter|\bprom\b/],not:/pledg/},
    {k:'fwd',label:'Return since (for history check)',kw:[/fwd|forward|future|return since|next/]}
   ],
   metrics:[
@@ -215,7 +242,7 @@ var CFG={
    {k:'sg',label:'Sales growth',s:'Sales gr.',u:'%',g:'Growth',d:1,w:5,tip:'Yearly sales growth over several years.'},
    {k:'pe',label:'P/E now',s:'P/E',u:'',g:'Value',d:-1,w:5,tip:'Price against yearly profit. Lower is cheaper.'},
    {k:'perel',label:'P/E against its own history',s:'P/E vs median',u:'×',g:'Value',d:-1,w:6,tip:'Today’s P/E divided by its 5-year median. Under 1 means cheaper than usual.'},
-   {k:'prom',label:'Promoter holding',s:'Promoter',u:'%',g:'Safety',d:1,w:4,tip:'Share held by the founders. Higher shows commitment.'},
+   {k:'prom',label:'Promoter holding',s:'Promoter',u:'%',g:'Safety',d:1,w:4,tip:'Share held by the founders. Higher shows commitment. 0% means no promoter and is left out.'},
    {k:'pledge',label:'Pledged shares',s:'Pledged',u:'%',g:'Safety',d:-1,w:5,tip:'Founders’ shares kept as security for loans. Lower is safer.'}
   ],
   flags:function(r){return [
@@ -282,7 +309,7 @@ function parseCSV(text){
   }
   row.push(cur);
   if(row.some(function(x){return x.trim()!==''}))rows.push(row);
-  var headers=(rows.shift()||[]).map(function(s){return s.trim()});
+  var headers=(rows.shift()||[]).map(function(s){return s.replace(/\s+/g,' ').trim()});
   return {headers:headers,rows:rows.map(function(r){return headers.map(function(_,i){return r[i]==null?'':r[i]})})};
 }
 function toNum(s){
@@ -323,11 +350,25 @@ function buildRows(kind){
       o[f.k]=f.text?raw:toNum(raw);
     });
     o.perel=(kind==='stocks'&&o.pe>0&&o.pe5>0)?o.pe/o.pe5:null;
+    if(kind==='stocks'&&o.prom===0)o.prom=null; /* 0% means no promoter, not a weak one */
     if(!o.name)o.name='Row '+(i+1);
     return o;
   }).filter(function(o){
     return C.metrics.some(function(m){return o[m.k]!=null});
   });
+  /* the same company listed twice: same name once spaces, dots and "Ltd" are ignored; keep the row with more data */
+  var seen=Object.create(null),out=[],dup=0;
+  var cnt=function(o){return C.metrics.filter(function(m){return o[m.k]!=null}).length};
+  D.rows.forEach(function(o){
+    var key=String(o.name).toLowerCase().replace(/\b(ltd|limited)\b\.?/g,'').replace(/[^a-z0-9]/g,'');
+    if(key&&key in seen){
+      dup++;
+      if(SET.dedupe){var j=seen[key];if(cnt(o)>cnt(out[j]))out[j]=o;return}
+    }
+    if(key)seen[key]=out.length;
+    out.push(o);
+  });
+  D.rows=out;D.dupes=dup;
   prepare(kind);
 }
 
@@ -381,6 +422,7 @@ function fmtV(m,v){
 /* ---------- state ---------- */
 var kind='stocks';
 var S={stocks:{},funds:{}};
+var SET=Object.assign({dedupe:true},store.get('shortlist.v1.settings')||{});
 var UI={limit:30,q:'',hide:false,mcap:'',cat:'All'};
 var expanded={};
 var wKey=function(k){return 'shortlist.v1.weights.'+k};
@@ -426,17 +468,17 @@ function renderBanner(){
   var D=D0(),b=$('#banner');
   b.replaceChildren();b.className='banner'+(D.example?' ex':'');
   if(D.live){
-    b.append(h('span',null,'Live data from AMFI, NAV date '+D.liveDate+'. '+D.rows.length+' funds scored. It refreshes every Sunday.'));
+    b.append(h('span',null,D.liveNote+' '+D.rows.length+' '+CFG[kind].noun+' scored.'));
     var ll=h('label','btn','Load my own list');ll.setAttribute('for','file');b.append(ll);
   }else if(D.example){
     b.append(h('span',null,'These are made-up example '+CFG[kind].noun+'. They show how the ranking works, they are not real picks.'));
     var l=h('label','btn primary','Load my own list');l.setAttribute('for','file');b.append(l);
   }else{
     b.append(h('span',null,'Your list: '+D.rows.length+' '+CFG[kind].noun+' scored.'));
-    var bt=h('button','btn',D.liveTable?'Back to live data':'Back to examples');bt.type='button';
+    var bt=h('button','btn',D.liveTable?(kind==='funds'?'Back to live data':'Back to site list'):'Back to examples');bt.type='button';
     bt.addEventListener('click',function(){
       store.del(dKey(kind));
-      if(D.liveTable){applyLive();return}
+      if(D.liveTable){applyLive(kind);return}
       D.table=sampleTable(kind);D.map=detectMap(CFG[kind],D.table);D.example=true;buildRows(kind);renderAll()});
     b.append(bt);
   }
@@ -566,6 +608,8 @@ function renderList(){
   $('#summary').textContent=res.total
     ? 'Showing '+shown.length+' of '+res.out.length+' '+CFG[kind].noun+(res.out.length<res.total?' after filters ('+res.total+' scored in all)':'')+', best score first.'
     : 'Nothing could be scored. Check the column matching, or raise a weight above 0.';
+  var dd=D0().dupes;
+  if(dd&&SET.dedupe)$('#summary').textContent+=' '+dd+' repeated '+(dd===1?'row':'rows')+' hidden.';
   var more=$('#more');more.hidden=res.out.length<=UI.limit;
 }
 function mean(a){return a.length?a.reduce(function(x,y){return x+y},0)/a.length:null}
@@ -622,7 +666,14 @@ function renderLearn(){
   box.append(h('p','muted','A link in one list can be luck. Trust a criterion only if it holds up in lists from several different years.'));
 }
 function renderNote(){$('#note').textContent=CFG[kind].noteText}
-function renderAll(){renderBanner();renderBar();renderPanel();renderList();renderLearn();renderNote()}
+function renderSettings(){
+  var D=D0(),cb=$('#optDedupe'),n=D.dupes||0;
+  cb.checked=!!SET.dedupe;
+  $('#dupeNote').textContent=SET.dedupe
+    ? (n?n+' repeated '+(n===1?'row is':'rows are')+' hidden in this list. Names are compared ignoring spaces, dots and "Ltd".':'No repeated rows in this list. If a company appears twice, only one copy is kept.')
+    : (n?n+' repeated '+(n===1?'row is':'rows are')+' shown, so those companies count twice in the ranking.':'No repeated rows in this list.');
+}
+function renderAll(){renderBanner();renderBar();renderPanel();renderSettings();renderList();renderLearn();renderNote()}
 
 /* ---------- data loading ---------- */
 function loadText(text){
@@ -650,6 +701,10 @@ $('#resetW').addEventListener('click',function(){
   store.del(wKey(kind));renderPanel();renderList();renderLearn();
 });
 $('#more').addEventListener('click',function(){UI.limit+=30;renderList()});
+$('#optDedupe').addEventListener('change',function(e){
+  SET.dedupe=e.target.checked;store.set('shortlist.v1.settings',SET);
+  buildRows('stocks');buildRows('funds');UI.limit=30;renderAll();
+});
 
 function setTab(k){
   kind=k;UI.limit=30;UI.q='';UI.mcap='';UI.cat='All';
@@ -661,14 +716,23 @@ function setTab(k){
 $('#tab-stocks').addEventListener('click',function(){setTab('stocks')});
 $('#tab-funds').addEventListener('click',function(){setTab('funds')});
 
-function applyLive(){
-  var D=S.funds;
-  D.table=D.liveTable;D.map=detectMap(CFG.funds,D.table);D.example=false;D.live=true;
-  buildRows('funds');
-  if(kind==='funds'){UI.limit=30;renderAll()}
+function applyLive(k){
+  var D=S[k];
+  D.table=D.liveTable;D.map=detectMap(CFG[k],D.table);D.example=false;D.live=true;
+  buildRows(k);
+  if(kind===k){UI.limit=30;renderAll()}
+}
+function hasCriteria(k,map){
+  return CFG[k].metrics.some(function(m){return m.k==='perel'?(map.pe>=0&&map.pe5>=0):map[m.k]>=0});
+}
+function offerLive(k){
+  var D=S[k];
+  if(D.example)applyLive(k);
+  else if(kind===k)renderBanner();
 }
 function tryLive(){
   if(typeof fetch!=='function')return;
+  /* funds: data/funds.json, refreshed weekly by the site's scheduled job */
   fetch('data/funds.json',{cache:'no-cache'}).then(function(r){if(!r.ok)throw new Error('no file');return r.json()}).then(function(j){
     if(!j||!j.funds||j.funds.length<5)return;
     var f=function(v){return v==null?'':String(v)};
@@ -678,8 +742,22 @@ function tryLive(){
       rows:j.funds.map(function(x){return [x.name,x.category,f(x.ret3),f(x.ret5),f(x.cons),f(x.exp),f(x.ten),f(x.vol),f(x.sharpe)]})
     };
     D.liveDate=j.updated||'unknown';
-    if(D.example)applyLive();
-    else if(kind==='funds')renderBanner();
+    D.liveNote='Live data from AMFI, NAV date '+D.liveDate+'. It refreshes every Sunday.';
+    offerLive('funds');
+  }).catch(function(){});
+  /* stocks: optional data/stocks.csv that you upload to the site, so every device sees the same list */
+  fetch('data/stocks.csv',{cache:'no-cache'}).then(function(r){
+    if(!r.ok)throw new Error('no file');
+    var lm=r.headers&&r.headers.get?r.headers.get('last-modified'):null;
+    return r.text().then(function(t){return {t:t,lm:lm}});
+  }).then(function(o){
+    var table=parseCSV(o.t);
+    if(table.rows.length<3||!hasCriteria('stocks',detectMap(CFG.stocks,table)))return;
+    var D=S.stocks;
+    D.liveTable=table;
+    var dt=o.lm?new Date(o.lm):null;
+    D.liveNote='Your stock list from this site'+(dt&&!isNaN(dt)?' (file dated '+dt.toLocaleDateString('en-IN')+')':'')+'.';
+    offerLive('stocks');
   }).catch(function(){});
 }
 initKind('stocks');initKind('funds');
@@ -688,3 +766,5 @@ renderAll();
 tryLive();
 })();
 </script>
+</body>
+</html>
