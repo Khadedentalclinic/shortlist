@@ -1,0 +1,53 @@
+name: Update data and publish site
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "30 2 * * 0"      # every Sunday, 8:00 AM India time
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Refresh fund data
+        id: update
+        continue-on-error: true
+        run: python scripts/update_funds.py
+      - name: Collect site files
+        run: |
+          mkdir _site
+          cp index.html _site/
+          cp -r data _site/data
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - name: Flag a failed data refresh
+        if: steps.update.outcome == 'failure'
+        run: |
+          echo "::warning::Fund data refresh failed; the site was published without new data."
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
