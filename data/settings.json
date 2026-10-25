@@ -1,0 +1,24 @@
+{
+ "saved": 1792955444373,
+ "saved_on": "2026-10-25",
+ "stocks": {
+  "roe": 8,
+  "roce": 8,
+  "de": 6,
+  "pg": 7,
+  "sg": 5,
+  "pe": 5,
+  "perel": 6,
+  "prom": 4,
+  "pledge": 5
+ },
+ "funds": {
+  "ret5": 8,
+  "ret3": 4,
+  "cons": 8,
+  "sharpe": 6,
+  "vol": 4,
+  "exp": 7,
+  "ten": 3
+ }
+}
