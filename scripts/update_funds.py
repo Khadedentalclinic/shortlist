@@ -65,13 +65,17 @@ def http_get(url, tries=4):
 
 # ---------- scheme list ----------
 def parse_amfi(text):
-    """Returns [(code, name, category_text)] for open-ended schemes.
+    """Returns [(code, name, category_text, plan, option)] for open-ended schemes.
 
-    Handles the classic layout (category lines such as
-    "Open Ended Schemes(Equity Scheme - Large Cap Fund)" above groups of schemes) and a
-    layout whose header row has its own scheme-category column."""
-    text = text.lstrip("\ufeff")
-    cat, out, name_i, cat_i = None, [], 3, None
+    Layouts handled:
+      - the current one: header "Scheme Code;...;Scheme Name;Plan;Option;Net Asset Value;Date",
+        with category lines such as "Open Ended Schemes(Equity Scheme - Large Cap Fund)"
+        above groups of schemes (AMC names sit on lines of their own)
+      - the older one without Plan and Option columns, where the scheme name carries them
+      - a layout whose header row has its own scheme-category column"""
+    text = text.lstrip("﻿")
+    cat, out = None, []
+    name_i, cat_i, plan_i, opt_i = 3, None, None, None
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -81,6 +85,8 @@ def parse_amfi(text):
             low = [p.lower() for p in parts]
             name_i = next((i for i, p in enumerate(low) if "scheme name" in p), 3)
             cat_i = next((i for i, p in enumerate(low) if "category" in p or "scheme type" in p), None)
+            plan_i = next((i for i, p in enumerate(low) if p == "plan"), None)
+            opt_i = next((i for i, p in enumerate(low) if p == "option"), None)
             continue
         if ";" not in line:
             m = CAT_RE.match(line)
@@ -96,7 +102,9 @@ def parse_amfi(text):
                 else:
                     row_cat = parts[cat_i]
             if row_cat:
-                out.append((parts[0], parts[name_i], row_cat))
+                plan = parts[plan_i] if plan_i is not None and plan_i < len(parts) else ""
+                opt = parts[opt_i] if opt_i is not None and opt_i < len(parts) else ""
+                out.append((parts[0], parts[name_i], row_cat, plan, opt))
     return out
 
 
@@ -117,9 +125,11 @@ def category_label(cat):
 def pick_schemes(entries):
     """Direct-plan growth schemes in the equity categories we rank."""
     chosen = []
-    for code, name, cat in entries:
-        low = name.lower()
-        if "direct" not in low or "growth" not in low or SKIP_NAME.search(name):
+    for code, name, cat, plan, option in entries:
+        full = " - ".join(x for x in (name, plan, option) if x)
+        direct = "direct" in (plan or name).lower()
+        growth = "growth" in (option or name).lower()
+        if not direct or not growth or SKIP_NAME.search(full):
             continue
         label = category_label(cat)
         if label:
@@ -336,6 +346,21 @@ def selftest(write_path=None):
     picked = pick_schemes(parse_amfi(sample))
     assert [p["code"] for p in picked] == ["100001", "100004"], picked
     assert picked[0]["category"] == "Large Cap" and picked[1]["category"] == "Index Fund", picked
+    # the layout AMFI publishes now: separate Plan and Option columns, AMC names on their own lines
+    current = ("Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;Net Asset Value;Date\n\n"
+               "Open Ended Schemes(Equity Scheme - Large Cap Fund)\n\nAxis Mutual Fund\n\n"
+               "100040;INFA;-;Axis Bluechip Fund;Direct Plan;Growth Option;50.1;26-Oct-2026\n"
+               "100041;INFB;INFC;Axis Bluechip Fund;Direct Plan;IDCW Option;50.1;26-Oct-2026\n"
+               "100042;INFD;-;Axis Bluechip Fund;Regular Plan;Growth Option;50.1;26-Oct-2026\n"
+               "100043;INFE;-;Axis Bluechip Fund;Direct Plan;Dividend Option;50.1;26-Oct-2026\n\n"
+               "Open Ended Schemes(Other Scheme - Index Funds)\n\nUTI Mutual Fund\n\n"
+               "100044;INFF;-;UTI Nifty 50 Index Fund;Direct Plan;Growth Option;50.1;26-Oct-2026\n\n"
+               "Open Ended Schemes(Children’s Fund - Childrens' Fund)\n\nAxis Mutual Fund\n\n"
+               "100045;INFG;-;Axis Children's Fund;Direct Plan;Growth Option;28.79;26-Oct-2026\n")
+    got = pick_schemes(parse_amfi(current))
+    assert [(g["code"], g["category"], g["name"]) for g in got] == [
+        ("100040", "Large Cap", "Axis Bluechip Fund (Direct)"),
+        ("100044", "Index Fund", "UTI Nifty 50 Index Fund (Direct)")], got
     # spaced category header, and a layout with its own category column
     spaced = ("Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Net Asset Value;Date\n"
               "Open Ended Schemes ( Equity Scheme - Flexi Cap Fund )\n"
