@@ -27,7 +27,11 @@ import sys
 import time
 import urllib.request
 
-AMFI_URL = "https://www.amfiindia.com/spages/NAVAll.txt"
+# AMFI's own download page lists the portal address; the older www address is kept as a fallback.
+AMFI_URLS = [
+    "https://portal.amfiindia.com/spages/NAVAll.txt",
+    "https://www.amfiindia.com/spages/NAVAll.txt",
+]
 MFAPI_URL = "https://api.mfapi.in/mf/{}"
 RISK_FREE = 6.5          # % a year, used for the Sharpe ratio
 GRID_STEPS = 60          # rolling windows sampled every 30 days, about 5 years
@@ -39,7 +43,7 @@ EQUITY_SUBCATS = {
     "Large & Mid Cap Fund", "Focused Fund", "Value Fund", "Contra Fund",
     "Dividend Yield Fund", "ELSS",
 }
-CAT_RE = re.compile(r"^(Open Ended|Close Ended|Interval Fund)\s*Schemes?\s*\((.+)\)\s*$", re.I)
+CAT_RE = re.compile(r"^(Open Ended|Close Ended|Interval Fund)\s*Schemes?\s*\(\s*(.+?)\s*\)\s*$", re.I)
 SKIP_NAME = re.compile(r"idcw|bonus|payout|reinvest|[-–]\s*dividend\b(?!\s+yield)|\betf\b", re.I)
 
 
@@ -50,7 +54,7 @@ def log(*a):
 def http_get(url, tries=4):
     for i in range(tries):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "shortlist-data-bot/1.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; shortlist-data-bot/1.0)", "Accept": "text/plain,application/json,*/*"})
             with urllib.request.urlopen(req, timeout=40) as r:
                 return r.read().decode("utf-8", "replace")
         except Exception:
@@ -61,20 +65,53 @@ def http_get(url, tries=4):
 
 # ---------- scheme list ----------
 def parse_amfi(text):
-    """Returns [(code, name, category_text)] for open-ended schemes."""
-    cat, out = None, []
+    """Returns [(code, name, category_text)] for open-ended schemes.
+
+    Handles the classic layout (category lines such as
+    "Open Ended Schemes(Equity Scheme - Large Cap Fund)" above groups of schemes) and a
+    layout whose header row has its own scheme-category column."""
+    text = text.lstrip("\ufeff")
+    cat, out, name_i, cat_i = None, [], 3, None
     for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
-        m = CAT_RE.match(line)
-        if m:
-            cat = m.group(2).strip() if m.group(1).lower().startswith("open") else None
+        parts = [p.strip() for p in line.split(";")]
+        if len(parts) >= 4 and parts[0].lower().startswith("scheme code"):
+            low = [p.lower() for p in parts]
+            name_i = next((i for i, p in enumerate(low) if "scheme name" in p), 3)
+            cat_i = next((i for i, p in enumerate(low) if "category" in p or "scheme type" in p), None)
             continue
-        parts = line.split(";")
-        if cat and len(parts) >= 6 and parts[0].strip().isdigit():
-            out.append((parts[0].strip(), parts[3].strip(), cat))
+        if ";" not in line:
+            m = CAT_RE.match(line)
+            if m:
+                cat = m.group(2).strip() if m.group(1).lower().startswith("open") else None
+            continue
+        if len(parts) >= 6 and parts[0].isdigit() and name_i < len(parts):
+            row_cat = cat
+            if cat_i is not None and cat_i < len(parts) and parts[cat_i]:
+                m = CAT_RE.match(parts[cat_i])
+                if m:
+                    row_cat = m.group(2).strip() if m.group(1).lower().startswith("open") else None
+                else:
+                    row_cat = parts[cat_i]
+            if row_cat:
+                out.append((parts[0], parts[name_i], row_cat))
     return out
+
+
+def category_label(cat):
+    """Short category name if we rank this category, else None."""
+    low = cat.lower()
+    if low.startswith("equity scheme"):
+        sub = cat.split("-", 1)[-1].strip()
+    else:
+        sub = cat.strip()
+    if sub in EQUITY_SUBCATS:
+        return sub.replace(" Fund", "")
+    if low.replace(" ", "") in ("otherscheme-indexfunds", "indexfunds", "indexfund"):
+        return "Index Fund"
+    return None
 
 
 def pick_schemes(entries):
@@ -84,13 +121,7 @@ def pick_schemes(entries):
         low = name.lower()
         if "direct" not in low or "growth" not in low or SKIP_NAME.search(name):
             continue
-        label = None
-        if cat.lower().startswith("equity scheme"):
-            sub = cat.split("-", 1)[-1].strip()
-            if sub in EQUITY_SUBCATS:
-                label = sub.replace(" Fund", "")
-        elif cat.lower().replace(" ", "") == "otherscheme-indexfunds":
-            label = "Index Fund"
+        label = category_label(cat)
         if label:
             chosen.append({"code": code, "name": clean_name(name), "category": label})
     return chosen
@@ -99,6 +130,38 @@ def pick_schemes(entries):
 def clean_name(name):
     base = re.sub(r"\s*[-–]\s*(direct plan|direct)\b.*$", "", name, flags=re.I).strip()
     return base + " (Direct)"
+
+
+def diagnose(text):
+    lines = text.splitlines()
+    head = re.sub(r"\s+", " ", text[:300])
+    log(f"  first characters: {head!r}")
+    log(f"  lines: {len(lines)}; lines containing ';': {sum(1 for l in lines if ';' in l)}")
+    cats = [l.strip() for l in lines if CAT_RE.match(l.strip())]
+    log(f"  category lines found: {len(cats)}; examples: {cats[:3]}")
+    if "<html" in text[:3000].lower():
+        log("  this address returned a web page, not the NAV file")
+
+
+def fetch_amfi(min_ok=30):
+    """Tries each AMFI address; returns the scheme list from the first one that looks right."""
+    best = []
+    for url in AMFI_URLS:
+        try:
+            text = http_get(url)
+        except Exception as e:
+            log(f"could not fetch {url}: {type(e).__name__}: {e}")
+            continue
+        entries = parse_amfi(text)
+        schemes = pick_schemes(entries)
+        log(f"{url}: {len(text)} characters, {len(entries)} open-ended scheme lines, "
+            f"{len(schemes)} direct growth equity or index schemes")
+        if len(schemes) >= min_ok:
+            return schemes
+        diagnose(text)
+        if len(schemes) > len(best):
+            best = schemes
+    return best
 
 
 # ---------- NAV history ----------
@@ -273,6 +336,27 @@ def selftest(write_path=None):
     picked = pick_schemes(parse_amfi(sample))
     assert [p["code"] for p in picked] == ["100001", "100004"], picked
     assert picked[0]["category"] == "Large Cap" and picked[1]["category"] == "Index Fund", picked
+    # spaced category header, and a layout with its own category column
+    spaced = ("Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Net Asset Value;Date\n"
+              "Open Ended Schemes ( Equity Scheme - Flexi Cap Fund )\n"
+              "100020;INF9;-;Omega Flexi Fund - Growth - Direct Plan;10.5;23-Oct-2026\n")
+    assert [p["category"] for p in pick_schemes(parse_amfi(spaced))] == ["Flexi Cap"]
+    newfmt = ("Scheme Code;Scheme Name;ISIN Div Payout/ISIN Growth;ISIN Div Reinvestment;Net Asset Value;Date;Scheme Category\n"
+              "100030;Delta Mid Cap Fund - Direct Plan - Growth;INF1;-;12.5;23-Oct-2026;Equity Scheme - Mid Cap Fund\n"
+              "100031;Delta Debt Fund - Direct Plan - Growth;INF2;-;12.5;23-Oct-2026;Debt Scheme - Gilt Fund\n")
+    got = pick_schemes(parse_amfi(newfmt))
+    assert [(p["code"], p["category"]) for p in got] == [("100030", "Mid Cap")], got
+    # the first address returns a web page, the second the real file
+    global http_get
+    real_get = http_get
+    pages = {AMFI_URLS[0]: "<!doctype html><html><body>Page moved</body></html>", AMFI_URLS[1]: sample}
+    http_get = lambda url, tries=4: pages[url]
+    try:
+        assert len(fetch_amfi(min_ok=1)) == 2
+        pages[AMFI_URLS[1]] = "<html>also a page</html>"
+        assert fetch_amfi(min_ok=1) == []
+    finally:
+        http_get = real_get
     hist = parse_history(json.dumps({"data": [{"date": "%02d-01-2025" % (i % 28 + 1), "nav": "10.%d" % i} for i in range(150)]}))
     assert hist is not None
     print("selftest passed:", len(out), "synthetic funds,", len(picked), "schemes picked from sample list")
@@ -297,7 +381,7 @@ def main():
         return
 
     log("Fetching AMFI scheme list...")
-    schemes = pick_schemes(parse_amfi(http_get(AMFI_URL)))
+    schemes = fetch_amfi()
     if args.max:
         schemes = schemes[: args.max]
     log(f"{len(schemes)} direct growth schemes to fetch")
@@ -319,6 +403,10 @@ def main():
         time.sleep(args.delay)
     if not fetched:
         log("No NAV history could be fetched. Keeping the old data.")
+        sys.exit(1)
+    if not args.max and len(fetched) < 0.6 * len(schemes):
+        log(f"Only {len(fetched)} of {len(schemes)} funds could be fetched from mfapi.in. "
+            "Keeping the old data so the rankings stay complete.")
         sys.exit(1)
 
     asof = max(s.d[-1] for _, s in fetched)
